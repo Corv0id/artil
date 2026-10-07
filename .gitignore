@@ -1,0 +1,15 @@
+# Runs & reports are generated; never commit (but keep the directory tracked).
+runs/*
+!runs/.gitkeep
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+
+# Environment
+.env
+
+# Editor / OS noise
+.DS_Store
