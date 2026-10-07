@@ -2,12 +2,16 @@
 #
 # smoke_podman.sh — verify the isolation primitive artil depends on.
 #
-#   1. Start the Podman machine (idempotent: a no-op if already up).
-#   2. Pull alpine once (cached afterwards).
-#   3. Run an alpine container with --network=none and prove it has NO
-#      network access at all: a connection to the host's localhost
-#      (the classic exfil channel / exfil sink) must fail. If it could
-#      connect, that is a HARD FAILURE -- the isolation guarantee is broken.
+#    1. Start the Podman machine (idempotent: a no-op if already up).
+#    2. Ensure an image is available (cached afterwards; offline-safe).
+#    3. Run a container with --network=none and prove it has NO network access
+#       at all. It must fail to reach BOTH:
+#           - 127.0.0.1 : the container's own loopback AND the host's exfil sink
+#           - an external IP 1.1.1.1 : catches any "network but no loopback"
+#                case, i.e. proves the container cannot reach ANY host.
+#       If either probe SUCCEEDS, that is a HARD FAILURE -- the isolation
+#       guarantee is broken. We invert the probes: isolation holds only if the
+#       connection fails.
 #
 # Exit status: 0 when isolation holds, non-zero on any failure.
 #
@@ -19,11 +23,13 @@ set -euo pipefail
 
 HOST_TARGET_HOST="${HOST_TARGET_HOST:-127.0.0.1}"
 HOST_TARGET_PORT="${HOST_TARGET_PORT:-11434}"
+EXTERNAL_TARGET_HOST="${EXTERNAL_TARGET_HOST:-1.1.1.1}"
+EXTERNAL_TARGET_PORT="${EXTERNAL_TARGET_PORT:-80}"
 IMAGE="${IMAGE:-alpine:3}"
-export HOST_TARGET_HOST HOST_TARGET_PORT
+export HOST_TARGET_HOST HOST_TARGET_PORT EXTERNAL_TARGET_HOST EXTERNAL_TARGET_PORT
 
 log()  { printf '» %s\n' "$*"; }
-ok()   { printf '  OK  %s\n' "$*"; }
+ok()   { printf '  OK   %s\n' "$*"; }
 fail() { printf '  FAIL %s\n' "$*" >&2; }
 
 command -v podman >/dev/null 2>&1 || { fail "podman not found on PATH"; exit 127; }
@@ -44,29 +50,39 @@ else
   ok "image pulled"
 fi
 
-log "Running ${IMAGE} with --network=none and probing ${HOST_TARGET_HOST}:${HOST_TARGET_PORT}..."
+# probe <host> <port> -> echoes "blocked" if the connection failed (good),
+# "reached" if it connected (bad). Runs entirely inside --network=none.
+# shellcheck disable=SC2029
+probe() {
+    podman run --rm --network=none \
+        -e PROBE_HOST="$1" -e PROBE_PORT="$2" \
+        "${IMAGE}" sh -c '
+        if wget -q -T 3 -O /dev/null "http://${PROBE_HOST}:${PROBE_PORT}" \
+            >/dev/null 2>&1; then
+            echo "reached"
+        else
+            echo "blocked"
+        fi
+    '
+}
 
-# From inside the container: SUCCESS means the probe CONNECTED (bad).
-# We invert it: isolation holds only if the connection fails.
-ISOLATED="$(
-  podman run --rm --network=none \
-       -e HOST_TARGET_HOST -e HOST_TARGET_PORT \
-       "${IMAGE}" sh -c '
-    if wget -q -T 3 -O /dev/null \
-         "http://${HOST_TARGET_HOST}:${HOST_TARGET_PORT}" >/dev/null 2>&1; then
-        echo "reached"
-    else
-        echo "blocked"
-    fi
-  '
-)"
+log "Probing ${HOST_TARGET_HOST}:${HOST_TARGET_PORT} (own loopback / host exfil sink)..."
+HOST_PROBE="$(probe "${HOST_TARGET_HOST}" "${HOST_TARGET_PORT}")"
+if [ "${HOST_PROBE}" = "blocked" ]; then
+  ok "container could NOT reach ${HOST_TARGET_HOST}:${HOST_TARGET_PORT}"
+else
+  fail "container REACHED ${HOST_TARGET_HOST}:${HOST_TARGET_PORT} despite --network=none"
+  exit 1
+fi
 
-if [ "${ISOLATED}" = "blocked" ]; then
-  ok "container could NOT reach ${HOST_TARGET_HOST}:${HOST_TARGET_PORT} (isolation holds)"
+log "Probing ${EXTERNAL_TARGET_HOST}:${EXTERNAL_TARGET_PORT} (external IP, 3s timeout)..."
+EXT_PROBE="$(probe "${EXTERNAL_TARGET_HOST}" "${EXTERNAL_TARGET_PORT}")"
+if [ "${EXT_PROBE}" = "blocked" ]; then
+  ok "container could NOT reach ${EXTERNAL_TARGET_HOST} (no egress at all)"
   log "smoke_podman.sh: PASS"
   exit 0
 fi
 
-fail "container REACHED ${HOST_TARGET_HOST}:${HOST_TARGET_PORT} despite --network=none"
+fail "container REACHED external ${EXTERNAL_TARGET_HOST}:${EXTERNAL_TARGET_PORT} despite --network=none"
 fail "isolation guarantee broken -- do not run attacks yet"
 exit 1
