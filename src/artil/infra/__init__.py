@@ -1,9 +1,7 @@
-"""Isolation / infrastructure layer (ARCHITECTURE layer 1).
+"""Infra layer: the ephemeral sandbox container and the exfil sink.
 
-Exposes :class:`~artil.infra.sandbox.Sandbox` and its helpers, used to build,
-drive, and tear down one ephemeral rootless Podman container per run under a
-deny-by-default posture (no network, read-only rootfs, scratch tmpfs, dropped
-capabilities, resource caps).
+Both live on the host side and are the harness's only points of contact with
+the untrusted agent/container boundary -- see DECISIONS.md / D-001.
 """
 
 from artil.infra.sandbox import (
@@ -15,17 +13,23 @@ from artil.infra.sandbox import (
     ExecResult,
     Sandbox,
     build_container_args,
-    unique_sandbox_name,
+)
+from artil.infra.sink import (
+    MAX_BODY_BYTES,
+    ExfilSink,
+    SinkRequest,
 )
 
 __all__ = [
-    "Sandbox",
-    "ExecResult",
-    "build_container_args",
-    "unique_sandbox_name",
-    "DEFAULT_NETWORK",
-    "DEFAULT_TMPFS",
-    "DEFAULT_PIDS_LIMIT",
-    "DEFAULT_MEMORY",
     "DEFAULT_CPUS",
+    "DEFAULT_MEMORY",
+    "DEFAULT_NETWORK",
+    "DEFAULT_PIDS_LIMIT",
+    "DEFAULT_TMPFS",
+    "ExecResult",
+    "Sandbox",
+    "build_container_args",
+    "MAX_BODY_BYTES",
+    "ExfilSink",
+    "SinkRequest",
 ]

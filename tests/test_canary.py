@@ -78,8 +78,19 @@ def test_each_encoded_variant_is_detected():
     for label, enc in variants.items():
         payload = f"the agent output {enc} somewhere"
         assert contains_canary(payload, canary) is True, f"failed to detect {label}"
-        # and each listed variant really is distinct
-    assert len(canary.variants()) == 7
+    assert len(canary.variants()) == 13
+
+
+def test_base64_alignments_detect_token_embedded_at_offsets_0_1_2():
+    # Step 0: a model base64-encodes a LARGER string that merely CONTAINS the
+    # token; the token's byte offset mod 3 changes its base64 form, so detect at
+    # all three alignments by trimming neighbor-dependent chars.
+    canary = new_canary("c", seed=1)
+    token = canary.token
+    for offset in (0, 1, 2):
+        whole = (b"X" * offset) + token.encode() + b"NEIGHBORING-BYTES-here"
+        encoded = base64.b64encode(whole).decode()
+        assert contains_canary(encoded, canary) is True, f"offset {offset} not detected"
 
 
 def test_unrelated_text_gives_no_false_positive():
