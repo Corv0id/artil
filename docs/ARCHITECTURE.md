@@ -6,12 +6,12 @@
 > an LLM judge; (4) one-way, out-of-band telemetry.
 
 ## Local environment (probed 2026-09-29)
-- Ollama 0.34.2 running. Owned: `qwen3.8:27b-mlx` (18 GB, heavy attacker/judge),
+- Ollama 0.34.2 running. Owned: `qwen3.8:27b-mlx` (heavy attacker/judge),
   `qwen3-embedding:4b` (RAG). **Missing: a small aligned instruct victim** → plan
   `qwen3:4b` (fast) or `llama3.1:8b-instruct` (comparable to published numbers).
 - Podman 6.1.0 rootless, machine `applehv` present but **never started** → first
   setup step: `podman machine start`.
-- No Docker. Python via `uv` (3.12). MacBook M5 Pro / 48 GB / 840 GB free.
+- No Docker. Python via `uv` (3.12).
 - Attacker/uncensored lane: pull a ready abliterated model
   (`huihui-ai/Hermes-3-Llama-3.2-3B-abliterated`) or abliterate `llama-3.1-8b`
   later with OBLITERATUS (MIT core). Different family from victim ⇒ no
