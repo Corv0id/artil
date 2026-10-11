@@ -1,13 +1,13 @@
 """Ephemeral Podman sandbox for the agent-under-test (ARCHITECTURE layer 1).
 
 Responsibilities:
-  * build + tear-down an *ephemeral, rootless* Podman container per run;
-  * enforce a deny-by-default posture: ``--network=none`` (no egress at all --
-    the exfil sink is reached out-of-band by the host, see DECISIONS.md),
-    ``--read-only`` rootfs, ``--tmpfs`` scratch, ``--cap-drop=ALL``,
-    ``--security-opt no-new-privileges``, and CPU/memory/PID caps;
-  * execute commands inside the sandbox with a hard ``timeout``;
-  * record the *resolved* image id/digest for reproducible snapshots.
+    * build + tear-down an *ephemeral, rootless* Podman container per run;
+    * enforce a deny-by-default posture: ``--network=none`` (no egress at all --
+      the exfil sink is reached out-of-band by the host, see DECISIONS.md),
+      ``--read-only`` rootfs, ``--tmpfs`` scratch, ``--cap-drop=ALL``,
+      ``--security-opt no-new-privileges``, and CPU/memory/PID caps;
+    * execute commands inside the sandbox with a hard ``timeout``;
+    * record the *resolved* image id/digest for reproducible snapshots.
 
 Only the Python standard library and the ``podman`` CLI (via :mod:`subprocess`)
 are used. The pure :func:`build_container_args` is unit-testable without podman.
@@ -80,7 +80,6 @@ def build_container_args(
     binary (``run -d ... <image> <command>``). Used by :class:`Sandbox` and the
     unit tests. ``mounts`` are read-only bind mounts ``(host_src, container_dst)``.
     """
-
     tmpfs = DEFAULT_TMPFS if tmpfs is None else list(tmpfs)
     command = DEFAULT_COMMAND if command is None else list(command)
     mounts = list(mounts) if mounts else []
@@ -105,7 +104,7 @@ def build_container_args(
     if pids_limit is not None:
         args += ["--pids-limit", str(pids_limit)]
     if memory is not None:
-        args += ["--memory", str(memory)]
+        args += ["--memory", memory]
     if cpus is not None:
         args += ["--cpus", str(cpus)]
     for src, dst in mounts:
@@ -245,22 +244,31 @@ class Sandbox:
 
     # --- operations ---------------------------------------------------------
 
-    def exec(self, cmd: Sequence[str], *, timeout: float | None = None) -> ExecResult:
-        """Run ``cmd`` inside the container. Never hangs.
+    def exec(
+        self, cmd: Sequence[str], *, timeout: float | None = None, stdin: str | None = None
+    ) -> ExecResult:
+        """Run ``cmd`` inside the container; never hangs.
 
-        On timeout the exec is killed and :class:`ExecResult` is returned with
-        ``timed_out=True``.
+        ``cmd`` is an argv list (shell spaces/quotes go in as separate elements).
+        ``stdin`` (a string) is piped into the process. On timeout the exec is
+        killed and :class:`ExecResult` is returned with ``timed_out=True``.
         """
-        argv = [self.podman_bin, "exec", self.name, *[str(c) for c in cmd]]
+        use_stdin = stdin is not None
+        argv = [self.podman_bin, "exec"]
+        if use_stdin:
+            argv.append("-i")  # podman forwards stdin only in interactive mode
+        argv += [self.name, *[str(c) for c in cmd]]
         proc = subprocess.Popen(
             argv,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            stdin=subprocess.PIPE if use_stdin else None,
             text=True,
             start_new_session=True,
         )
+        payload = stdin if use_stdin else None
         try:
-            out, err = proc.communicate(timeout=timeout)
+            out, err = proc.communicate(input=payload, timeout=timeout)
             return ExecResult(proc.returncode or 0, out or "", err or "", timed_out=False)
         except subprocess.TimeoutExpired:
             # Kill the whole local process group so the pipe write-ends close
@@ -272,6 +280,18 @@ class Sandbox:
             out, err = proc.communicate()
             rc = proc.returncode if proc.returncode is not None else -9
             return ExecResult(rc, out or "", err or "", timed_out=True)
+
+    def write_file(self, path: str, content: str, *, timeout: float = 30.0) -> ExecResult:
+        """Write ``content`` to ``path`` inside the container via stdin.
+
+        The path is a positional placeholder argument to a ``cat > "$1"`` script,
+        so a file name with spaces or quotes is never interpolated into a shell
+        string. Raises on a non-zero write.
+        """
+        res = self.exec(["sh", "-c", 'cat > "$1"', "_", path], stdin=content, timeout=timeout)
+        if res.returncode != 0 and not res.timed_out:
+            raise RuntimeError(f"write_file {path!r} failed: {res.stderr.strip()}")
+        return res
 
     def inspect(self) -> dict:
         """Return the parsed ``podman inspect <name>`` dict for this container."""

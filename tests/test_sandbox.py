@@ -258,7 +258,7 @@ def test_container_removed_after_exception(image):
         with Sandbox(image, name=name) as sbx:
             assert sbx.is_running is True
             raise RuntimeError("boom inside sandbox")
-        # The block exited via exception; podman rm -f must still have run.
+    # The block exited via exception; podman rm -f must still have run.
     assert not _container_exists(name), "container leaked after exception"
 
 
@@ -274,3 +274,47 @@ def test_command_timeout_returns_timed_out(image):
         assert sbx.is_running is True  # still alive inside the block
     assert sbx.is_running is False
     assert not _container_exists("atil-test-timeout")
+
+
+def _read_file(sbx: Sandbox, path: str) -> str:
+    """Read a container file back via a positional-arg cat (never interpolated)."""
+    res = sbx.exec(["sh", "-c", 'cat -- "$1"', "_", path])
+    assert res.returncode == 0, res.stderr
+    return res.stdout
+
+
+@pytest.mark.integration
+def test_write_file_then_read_back(image):
+    content = "hello world\nsecond line\n"
+    with Sandbox(image, name="atil-test-write") as sbx:
+        sbx.write_file("/tmp/plain.txt", content)
+        assert _read_file(sbx, "/tmp/plain.txt") == content
+
+
+@pytest.mark.integration
+def test_write_file_name_with_spaces_and_quotes(image):
+    # spaces AND a double quote: must not be interpolated; it is a positional arg.
+    weird_path = '/tmp/weird  name".txt'
+    content = 'value with "quotes" and spaces\n'
+    with Sandbox(image, name="atil-test-weird") as sbx:
+        sbx.write_file(weird_path, content)
+        assert _read_file(sbx, weird_path) == content
+        listing = sbx.exec(["sh", "-c", "ls /tmp"]).stdout
+        assert "weird" in listing  # the real name exists, un-mangled
+
+
+@pytest.mark.integration
+def test_write_file_to_readonly_rootfs_raises(image):
+    # /etc is on the --read-only rootfs; only /tmp and /work (tmpfs) are writable.
+    with Sandbox(image, name="atil-test-ro") as sbx:
+        with pytest.raises(RuntimeError):
+            sbx.write_file("/etc/cannot-write.txt", "nope")
+
+
+@pytest.mark.integration
+def test_write_file_treats_content_as_data_not_shell(image):
+    # Shell metacharacters in content must be written literally, not executed.
+    payload = "echo $HOME\nrm -rf /\n$(x)\n"
+    with Sandbox(image, name="atil-test-metachar") as sbx:
+        sbx.write_file("/tmp/metachar.txt", payload)
+        assert _read_file(sbx, "/tmp/metachar.txt") == payload
