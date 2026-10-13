@@ -61,6 +61,10 @@ curl -fsS http://localhost:11434 >/dev/null   # or: ollama serve
 
 # 4. Run the environment doctor:
 uv run artil doctor
+
+# 5. Run the pilots (no tuning -- the first read of each behaviour):
+N_SEEDS=10 uv run python scripts/pilot_benign.py      # benign task baseline
+N_SEEDS=20 uv run python scripts/pilot_attack.py       # attack vs control, with Wilson CIs
 ```
 
 ## Testing
