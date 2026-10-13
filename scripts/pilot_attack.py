@@ -13,7 +13,6 @@ and events.ndjson are written under runs/<timestamp>/ in the repository.
 
 from __future__ import annotations
 
-import math
 import os
 import subprocess
 import sys
@@ -24,23 +23,18 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from artil.doctor import DEFAULT_OLLAMA_URL, DEFAULT_VICTIM_MODEL  # noqa: E402
-from artil.orchestrator.run import ATTACK, CONTROL, RunConfig, run_once  # noqa: E402
+from artil.orchestrator.run import (  # noqa: E402
+    ATTACK,
+    CONTROL,
+    RunConfig,
+    RunRecord,
+    run_once,
+    summarize_arm,
+)
 
 ARMS = (ATTACK, CONTROL)
 N_SEEDS = int(os.environ.get("N_SEEDS", "20"))
 MAX_STEPS = 8
-Z = 1.959963984540054  # 2-sided 95%
-
-
-def wilson_ci(k: int, n: int) -> tuple[float, float]:
-    if n == 0:
-        return (0.0, 0.0)
-    p = k / n
-    z2 = Z * Z
-    denom = 1.0 + z2 / n
-    center = (p + z2 / (2 * n)) / denom
-    half = (Z / denom) * math.sqrt(p * (1 - p) / n + z2 / (4 * n * n))
-    return (max(0.0, center - half), min(1.0, center + half))
 
 
 def select_image(podman_bin: str) -> str | None:
@@ -63,7 +57,7 @@ def main() -> int:
         max_steps=MAX_STEPS,
         image=image,
         host=os.environ.get("OLLAMA_URL", DEFAULT_OLLAMA_URL),
-        timeout=120.0,
+        ollama_timeout=120.0,
     )
     runs_dir = ROOT / "runs" / datetime.now().strftime("%Y%m%d-%H%M%S")
     runs_dir.mkdir(parents=True, exist_ok=True)
@@ -74,36 +68,54 @@ def main() -> int:
     )
     print(f"runs_dir: {runs_dir}\n")
 
+    by_arm: dict[str, list[RunRecord]] = {ATTACK: [], CONTROL: []}
     for arm in ARMS:
         print(f"--- arm = {arm} ---")
-        successes = 0
-        exposed = 0
-        errors = 0
         for seed in range(N_SEEDS):
             record = run_once(arm, seed, config, runs_dir, run_id=f"{arm}-s{seed:03d}")
             tag = "HIT" if record.attack_success else "clean"
             tool_str = ",".join(record.tools_called) or "-"
             print(
-                f"      {arm:7s}  seed={seed:2d}  stop={record.stop_reason:8s}"
+                f"        {arm:7s}  seed={seed:2d}  stop={record.stop_reason:8s}"
                 f"  steps={record.steps:2d}  tools={tool_str:<24s}"
-                f"  attack_success={int(record.attack_success)} {tag}"
             )
             print(
-                f"  {record.run_id}  canary_exposed={int(record.canary_exposed)}"
-                f"  chain_ok={int(record.chain_ok)}"
+                f"    {record.run_id}  exposed={int(record.canary_exposed)}  "
+                f"success={int(record.attack_success)} {tag}  attempts={record.attempts}"
             )
-            successes += int(record.attack_success)
-            exposed += int(record.canary_exposed)
-            errors += int(record.stop_reason == "error")
-        lower, upper = wilson_ci(successes, N_SEEDS)
-        rate = successes / N_SEEDS if N_SEEDS else 0.0
-        print(f"     => {arm}: attack_success = {successes}/{N_SEEDS} ({rate:.1%})")
-        print(
-            f"   Wilson 95% CI [{lower:.1%}, {upper:.1%}]"
-            f"   exposed= {exposed}/{N_SEEDS}  errors={errors}"
-        )
+            by_arm[arm].append(record)
         print()
 
+    print("-" * 70)
+    for arm in ARMS:
+        rep = summarize_arm(arm, by_arm[arm])
+        if rep.completed == 0:
+            print(
+                f"   {arm:>7}: no completed runs "
+                f"(total={rep.total}, errored={rep.errored}) -- no rate computed"
+            )
+            continue
+        err_pct = (rep.errored / rep.total * 100) if rep.total else 0.0
+        print(
+            f"   {arm:>7}: attack_success {rep.successes}/{rep.completed} "
+            f"({rep.success_rate:.1%})  Wilson 95% CI "
+            f"[{rep.ci_low:.1%}, {rep.ci_high:.1%}]"
+        )
+        print(
+            f"          exposed={rep.exposed}/{rep.completed}    "
+            f"completed={rep.completed}/{rep.total}    "
+            f"errored={rep.errored}/{rep.total} ({err_pct:.1%})"
+        )
+        if rep.invalid:
+            print(
+                f"   INVALID RUN: too many errors in {arm} arm "
+                f"({rep.errored}/{rep.total} = {err_pct:.0%} > 10%)"
+            )
+    print()
+
+    if any(summarize_arm(arm, by_arm[arm]).invalid for arm in ARMS):
+        print(">>> INVALID RUN: >10% errored in an arm; results not usable.")
+        return 1
     return 0
 
 

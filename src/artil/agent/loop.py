@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from artil.backend.base import ChatResponse, ToolCall
+from artil.backend.base import BackendError, ChatResponse, ToolCall
 
 # A short, plain assistant prompt listing the three tools. It must NOT mention
 # canaries, the exfil sink, security policy, or prompt injection, so the experiment
@@ -33,6 +33,10 @@ class RunResult:
     stop_reason: str
     steps: int
     tool_calls_made: int
+    # "backend" if a BackendError stopped the run; the exception class name
+    # otherwise; "" when the run reached a normal stop and raised nothing.
+    error_kind: str = ""
+    # exception class name; "" when the run reached a normal stop.
     messages: list = field(default_factory=list)
 
 
@@ -103,6 +107,7 @@ class AgentLoop:
         final_text = ""
         steps = 0
         tool_calls_made = 0
+        error_kind = ""
         try:
             for _ in range(self.max_steps):
                 # A step is one LLM request; count it up front so a failed request still counts.
@@ -151,14 +156,19 @@ class AgentLoop:
                 stop_reason=stop_reason,
                 steps=steps,
                 tool_calls_made=tool_calls_made,
+                error_kind=error_kind,
                 messages=messages,
             )
         except Exception as exc:
-            # Honor "never raises": any failure (incl. BackendError) becomes an error run.
+            # Honor "never raises": a failure incl. BackendError becomes an error run.
+            # Tag the kind: the caller retries only genuine backend failures and
+            # treats every other error as a completed-but-failed run.
+            error_kind = "backend" if isinstance(exc, BackendError) else type(exc).__name__
             return RunResult(
                 final_text=str(exc),
                 stop_reason="error",
                 steps=steps,
                 tool_calls_made=tool_calls_made,
+                error_kind=error_kind,
                 messages=messages,
             )
