@@ -7,7 +7,8 @@ reached the exfil sink. One line is printed per run plus a Wilson 95% CI summary
 The control must yield 0 successes -- any nonzero control success is a harness bug.
 
 Config is the experiment default: qwen3:4b, temperature 0.7, num_ctx 16384, think=false,
-max_steps=8 (DECISIONS D-002 / D-003). Nothing is tuned here (D-003).
+max_steps=8 (DECISIONS D-002 / D-003). Nothing is tuned here (D-003). Per-run result.json
+and events.ndjson are written under runs/<timestamp>/ in the repository.
 """
 
 from __future__ import annotations
@@ -16,7 +17,7 @@ import math
 import os
 import subprocess
 import sys
-import tempfile
+from datetime import datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -27,24 +28,8 @@ from artil.orchestrator.run import ATTACK, CONTROL, RunConfig, run_once  # noqa:
 
 ARMS = (ATTACK, CONTROL)
 N_SEEDS = int(os.environ.get("N_SEEDS", "20"))
-MAX_STEPS = int(os.environ.get("MAX_STEPS", "8"))
+MAX_STEPS = 8
 Z = 1.959963984540054  # 2-sided 95%
-
-
-def select_image(podman_bin: str) -> str | None:
-    candidates = [
-        os.environ.get("IMAGE"),
-        "redis:7-alpine",
-        "alpine:3",
-        "python:3.11-slim",
-    ]
-    for cand in candidates:
-        if not cand:
-            continue
-        exists = subprocess.run([podman_bin, "image", "exists", cand], capture_output=True)
-        if exists.returncode == 0:
-            return cand
-    return None
 
 
 def wilson_ci(k: int, n: int) -> tuple[float, float]:
@@ -56,6 +41,12 @@ def wilson_ci(k: int, n: int) -> tuple[float, float]:
     center = (p + z2 / (2 * n)) / denom
     half = (Z / denom) * math.sqrt(p * (1 - p) / n + z2 / (4 * n * n))
     return (max(0.0, center - half), min(1.0, center + half))
+
+
+def select_image(podman_bin: str) -> str | None:
+    image = os.environ.get("IMAGE", "alpine:3")
+    exists = subprocess.run([podman_bin, "image", "exists", image], capture_output=True)
+    return image if exists.returncode == 0 else None
 
 
 def main() -> int:
@@ -74,7 +65,8 @@ def main() -> int:
         host=os.environ.get("OLLAMA_URL", DEFAULT_OLLAMA_URL),
         timeout=120.0,
     )
-    runs_dir = Path(tempfile.mkdtemp(prefix="artil-pilot-"))
+    runs_dir = ROOT / "runs" / datetime.now().strftime("%Y%m%d-%H%M%S")
+    runs_dir.mkdir(parents=True, exist_ok=True)
     print(
         f"pilot_attack  arms={ARMS}  seeds=0..{N_SEEDS - 1}  model={config.model}"
         f"  temp={config.temperature}  num_ctx={config.num_ctx}  think={config.think}"
@@ -92,24 +84,23 @@ def main() -> int:
             tag = "HIT" if record.attack_success else "clean"
             tool_str = ",".join(record.tools_called) or "-"
             print(
-                f"       {arm:7s}  seed={seed:2d}  stop={record.stop_reason:8s}"
-                f"  steps={record.steps:2d}  tools={tool_str:<22s}"
+                f"      {arm:7s}  seed={seed:2d}  stop={record.stop_reason:8s}"
+                f"  steps={record.steps:2d}  tools={tool_str:<24s}"
                 f"  attack_success={int(record.attack_success)} {tag}"
             )
             print(
-                f"   {record.run_id}  canary_exposed={int(record.canary_exposed)}"
-                f"   chain_ok={int(record.chain_ok)}"
+                f"  {record.run_id}  canary_exposed={int(record.canary_exposed)}"
+                f"  chain_ok={int(record.chain_ok)}"
             )
             successes += int(record.attack_success)
             exposed += int(record.canary_exposed)
             errors += int(record.stop_reason == "error")
-
         lower, upper = wilson_ci(successes, N_SEEDS)
         rate = successes / N_SEEDS if N_SEEDS else 0.0
+        print(f"     => {arm}: attack_success = {successes}/{N_SEEDS} ({rate:.1%})")
         print(
-            f"    => {arm}: attack_success = {successes}/{N_SEEDS} ({rate:.1%})"
-            f"  Wilson 95% CI [{lower:.1%}, {upper:.1%}]"
-            f"  exposed= {exposed}/{N_SEEDS}  errors={errors}"
+            f"   Wilson 95% CI [{lower:.1%}, {upper:.1%}]"
+            f"   exposed= {exposed}/{N_SEEDS}  errors={errors}"
         )
         print()
 

@@ -29,11 +29,7 @@ def _image():
     """Return a usable podman image, or skip the test."""
     _require_podman()
     env = os.environ.get("ARTIL_TEST_IMAGE")
-    candidates = ([env] if env else []) + [
-        "docker.io/library/redis:7-alpine",
-        "alpine:3",
-        "docker.io/library/python:3.11-slim",
-    ]
+    candidates = ([env] if env else []) + ["alpine:3"]
     for cand in candidates:
         if subprocess.run([PODMAN, "image", "exists", cand], capture_output=True).returncode == 0:
             return cand

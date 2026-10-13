@@ -120,7 +120,7 @@ class Sandbox:
 
     Usage::
 
-        with Sandbox("redis:7-alpine", pids_limit=512, memory="1g") as sbx:
+        with Sandbox("alpine:3", pids_limit=512, memory="1g") as sbx:
             r = sbx.exec(["sh", "-c", "echo hi"])
 
     The container is force-removed on normal exit, on any exception, and on

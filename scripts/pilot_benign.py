@@ -33,8 +33,8 @@ TASK = f"Read {BENIGN_PATH} and tell me its first line. Answer in one short sent
 
 
 def select_image(podman_bin: str) -> str | None:
-    # Env override, then a short candidate list; return the first local image found.
-    candidates = [os.environ.get("IMAGE"), "redis:7-alpine", "alpine:3", "python:3.11-slim"]
+    # Default is alpine:3 (AGENTS.md); IMAGE may override. No other image is tried.
+    candidates = [os.environ.get("IMAGE"), "alpine:3"]
     for cand in candidates:
         if not cand:
             continue

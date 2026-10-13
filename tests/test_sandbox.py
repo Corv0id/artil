@@ -153,11 +153,7 @@ def _try_start_machine() -> bool:
 
 def _select_image() -> str | None:
     env = os.environ.get("ARTIL_TEST_IMAGE")
-    candidates = ([env] if env else []) + [
-        "docker.io/library/redis:7-alpine",
-        "alpine:3",
-        "docker.io/library/python:3.11-slim",
-    ]
+    candidates = ([env] if env else []) + ["alpine:3"]
     for cand in candidates:
         res = subprocess.run([PODMAN, "image", "exists", cand], capture_output=True)
         if res.returncode == 0:

@@ -321,7 +321,7 @@ def _select_image():
 
     if os.environ.get("IMAGE"):
         return os.environ["IMAGE"]
-    for cand in ("alpine:3", "redis:7-alpine", "python:3.11-slim"):
+    for cand in ("alpine:3",):
         if subprocess.run(["podman", "image", "exists", cand], capture_output=True).returncode == 0:
             return cand
     return None
